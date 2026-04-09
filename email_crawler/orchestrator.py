@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable
 
 from playwright.async_api import async_playwright
 
@@ -15,15 +14,9 @@ from .storage import JsonRealtimeWriter
 
 
 class CrawlOrchestrator:
-    def __init__(
-        self,
-        config: CrawlConfig,
-        logger: logging.Logger,
-        status_callback: Callable[[str], None] | None = None,
-    ) -> None:
+    def __init__(self, config: CrawlConfig, logger: logging.Logger) -> None:
         self.config = config
         self.logger = logger
-        self.status_callback = status_callback
 
     async def run(self) -> None:
         self.config.validate()
@@ -58,7 +51,6 @@ class CrawlOrchestrator:
             group_name=self.config.group_name if len(self.config.cities) > 1 else None,
         )
         self.logger.info("city_started | city=%s | business_type=%s", city, self.config.business_type)
-        self._status(f"Старт города: {city}")
 
         seen_sites: set[str] = set()
         seen_emails: set[str] = set()
@@ -66,7 +58,6 @@ class CrawlOrchestrator:
         try:
             for query_base in self.config.search_queries:
                 query = f"{query_base.strip()} {city}".strip()
-                self._status(f"Поиск: {query}")
                 found_sites = await search_parser.search_sites(
                     query=query,
                     pages=self.config.search_pages,
@@ -84,7 +75,6 @@ class CrawlOrchestrator:
                     seen_sites.add(site_url)
                     writer.increment_sites()
                     self.logger.info("site_processing | city=%s | url=%s", city, site_url)
-                    self._status(f"Сайт: {site_url}")
 
                     try:
                         extracted = await site_parser.extract_emails_from_site(
@@ -107,7 +97,6 @@ class CrawlOrchestrator:
                                 site_url,
                                 found_at,
                             )
-                            self._status(f"Email: {email} ({found_at})")
                     except Exception as exc:  # noqa: BLE001
                         writer.increment_errors()
                         self.logger.exception(
@@ -116,21 +105,10 @@ class CrawlOrchestrator:
                             site_url,
                             exc,
                         )
-                        self._status(f"Ошибка сайта: {site_url}")
                         continue
         except Exception as exc:  # noqa: BLE001
             writer.increment_errors()
             self.logger.exception("city_processing_exception | city=%s | error=%s", city, exc)
-            self._status(f"Ошибка города: {city}")
         finally:
             self.logger.info("city_finished | city=%s | output=%s", city, writer.path)
-            self._status(f"Город завершён: {city} | файл: {writer.path}")
             await asyncio.sleep(0)
-
-    def _status(self, message: str) -> None:
-        if self.status_callback:
-            try:
-                self.status_callback(message)
-            except Exception:
-                # UI callback не должен ломать процесс парсинга.
-                pass
